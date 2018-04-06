@@ -1,0 +1,391 @@
+apiVersion: v1
+data:
+  icp_base_rules.yml: |
+    groups:
+    - name: node.rules
+      rules:
+      - alert: ICPNodeExporterDown
+        expr: absent(up{component="nodeexporter"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Prometheus could not scrape a node-exporter for more than 10m,
+            or node-exporters have disappeared from discovery.
+          summary: node-exporter cannot be scraped
+      - alert: ICPNodeOutOfDisk
+        expr: kube_node_status_condition{condition="OutOfDisk",status="true"} == 1
+        labels:
+          service: ICP
+          severity: critical
+        annotations:
+          description: '{{ $labels.node }} has run out of disk space.'
+          summary: Node ran out of disk space.
+      - alert: ICPNodeMemoryPressure
+        expr: kube_node_status_condition{condition="MemoryPressure",status="true"} ==
+          1
+        labels:
+          service: ICP
+          severity: warning
+        annotations:
+          description: '{{ $labels.node }} is under memory pressure.'
+          summary: Node is under memory pressure.
+      - alert: ICPNodeDiskPressure
+        expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+        labels:
+          service: ICP
+          severity: warning
+        annotations:
+          description: '{{ $labels.node }} is under disk pressure.'
+          summary: Node is under disk pressure.
+      - alert: ICPHostCPUUtilisation
+        expr: 100 - (avg by(instance) (irate(node_cpu{mode="idle"}[5m])) * 100) > 70
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          description: 'High CPU utilisation detected for instance {{ $labels.instance_id
+            }} tagged as: {{ $labels.instance_name_tag }}, the utilisation is currently:
+            {{ $value }}%'
+          summary: CPU Utilisation Alert
+      - alert: ICPPreditciveHostDiskSpace
+        expr: predict_linear(node_filesystem_free{mountpoint="/"}[4h], 4 * 3600) < 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          description: 'Based on recent sampling, the disk is likely to will fill on volume
+            {{ $labels.mountpoint }} within the next 4 hours for instace: {{ $labels.instance_id
+            }} tagged as: {{ $labels.instance_name_tag }}'
+          summary: Predictive Disk Space Utilisation Alert
+      - alert: ICPHostHighMemeoryLoad
+        expr: (sum(node_memory_MemTotal) - sum(node_memory_MemFree + node_memory_Buffers
+          + node_memory_Cached)) / sum(node_memory_MemTotal) * 100 > 85
+        labels:
+          severity: warning
+        annotations:
+          description: Memory of a host is almost full for instance {{ $labels.instance_id
+            }}
+          summary: Memory utilization Alert
+      - alert: ICPNodeSwapUsage
+        expr: (((node_memory_SwapTotal - node_memory_SwapFree) / node_memory_SwapTotal)
+          * 100) > 75
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          description: '{{$labels.instance}}: Swap usage usage is above 75% (current value
+            is: {{ $value }})'
+          summary: '{{$labels.instance}}: Swap usage detected'
+    - name: prometheus.rules
+      rules:
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Reloading Prometheus configuration has failed for {{ $labels.namespace
+            }}/{{ $labels.pod}}.
+          summary: Prometheus configuration reload has failed
+      - alert: PrometheusIngestionThrottling
+        expr: prometheus_local_storage_persistence_urgency_score > 0.95
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          description: Prometheus cannot persist chunks to disk fast enough. It's urgency
+            value is {{$value}}.
+          summary: Prometheus is (or borderline) throttling ingestion of metrics
+      - alert: PrometheusNotificationQueueRunningFull
+        expr: predict_linear(prometheus_notifications_queue_length[5m], 60 * 30) > prometheus_notifications_queue_capacity
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Prometheus alert notification queue is running full for {{$labels.namespace}}/{{$labels.pod}}
+          summary: Prometheus alert notification queue is running full
+      - alert: PrometheusErrorSendingAlerts
+        expr: rate(prometheus_notifications_errors_total[5m]) / rate(prometheus_notifications_sent_total[5m])
+          > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Errors while sending alerts from Prometheus {{$labels.namespace}}/{{$labels.pod}}
+            to Alertmanager {{$labels.Alertmanager}}
+          summary: Errors while sending alert from Prometheus
+      - alert: PrometheusErrorSendingAlerts
+        expr: rate(prometheus_notifications_errors_total[5m]) / rate(prometheus_notifications_sent_total[5m])
+          > 0.03
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          description: Errors while sending alerts from Prometheus {{$labels.namespace}}/{{$labels.pod}}
+            to Alertmanager {{$labels.Alertmanager}}
+          summary: Errors while sending alert from Prometheus
+      - alert: PrometheusNotConnectedToAlertmanagers
+        expr: prometheus_notifications_alertmanagers_discovered < 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Prometheus {{ $labels.namespace }}/{{ $labels.pod}} is not connected
+            to any Alertmanagers
+          summary: Prometheus is not connected to any Alertmanagers
+    - name: kubelet.rules
+      rules:
+      - alert: ICPNodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          description: The Kubelet on {{ $labels.node }} has not checked in with the API,
+            or has set itself to NotReady, for more than an hour
+          summary: Node status is NotReady
+      - alert: ICPManyNodesNotReady
+        expr: count(kube_node_status_condition{condition="Ready",status="true"} == 0)
+          > 1 and (count(kube_node_status_condition{condition="Ready",status="true"} ==
+          0) / count(kube_node_status_condition{condition="Ready",status="true"})) > 0.2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          description: '{{ $value }} Kubernetes nodes (more than 10% are in the NotReady
+            state).'
+          summary: Many Kubernetes nodes are Not Ready
+      - alert: ICPKubeletDown
+        expr: count(up{job="kubernetes-nodes"} == 0) / count(up{job="kubernetes-nodes"})
+          > 0.03
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          description: Prometheus failed to scrape {{ $value }}% of kubelets.
+          summary: Many Kubelets cannot be scraped
+      - alert: ICPKubeletDown
+        expr: absent(up{job="kubernetes-nodes"} == 1) or count(up{job="kubernetes-nodes"}
+          == 0) / count(up{job="kubernetes-nodes"}) > 0.1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          description: Prometheus failed to scrape {{ $value }}% of kubelets, or all Kubelets
+            have disappeared from service discovery.
+          summary: Many Kubelets cannot be scraped
+      - alert: ICPKubeletTooManyPods
+        expr: kubelet_running_pod_count > 110
+        labels:
+          severity: warning
+        annotations:
+          description: Kubelet {{$labels.instance}} is running {{$value}} pods, close
+            to the limit of 110
+          summary: Kubelet is close to pod limit
+    - name: kube-apiserver.rules
+      rules:
+      - alert: ICPApiserverDown
+        expr: absent(up{job="kubernetes-apiservers"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          description: Prometheus failed to scrape API server(s), or all API servers have
+            disappeared from service discovery.
+          summary: API server unreachable
+      - alert: ICPApiServerLatency
+        expr: histogram_quantile(0.99, sum without(instance, resource) (apiserver_request_latencies_bucket{verb!~"CONNECT|WATCHLIST|WATCH|PROXY"}))
+          / 1e+06 > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: 99th percentile Latency for {{ $labels.verb }} requests to the
+            kube-apiserver is higher than 1s.
+          summary: Kubernetes apiserver latency is high
+    - name: general.rules
+      rules:
+      - alert: ICPMonitoringTargetDown
+        expr: 100 * (count by(job) (up == 0) / count by(job) (up)) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: '{{ $value }}% or more of {{ $labels.job }} targets are down.'
+          summary: Targets are down
+      - alert: ICPMonitoringHeartbeat
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          description: This is a Hearbeat event meant to ensure that the entire Alerting
+            pipeline is functional.
+          summary: Alerting Heartbeat
+      - alert: ICPTooManyOpenFileDescriptors
+        expr: 100 * (process_open_fds / process_max_fds) > 95
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          description: '{{ $labels.job }}: {{ $labels.namespace }}/{{ $labels.pod }} ({{
+            $labels.instance }}) is using {{ $value }}% of the available file/socket descriptors.'
+          summary: Too many open file descriptors for the monitoring target
+      - record: instance:fd_utilization
+        expr: process_open_fds / process_max_fds
+      - alert: ICPFdExhaustionClose
+        expr: predict_linear(instance:fd_utilization[1h], 3600 * 4) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: '{{ $labels.job }}: {{ $labels.namespace }}/{{ $labels.pod }} ({{
+            $labels.instance }}) instance will exhaust in file/socket descriptors soon'
+          summary: File descriptors soon exhausted for the monitoring target
+      - alert: ICPFdExhaustionClose
+        expr: predict_linear(instance:fd_utilization[10m], 3600) > 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          description: '{{ $labels.job }}: {{ $labels.namespace }}/{{ $labels.pod }} ({{
+            $labels.instance }}) instance will exhaust in file/socket descriptors soon'
+          summary: File descriptors soon exhausted for the monitoring target
+      - alert: ICPPodFrequentlyRestarting
+        expr: delta(kube_pod_container_status_restarts[1h]) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          description: Pod {{$labels.namespaces}}/{{$labels.pod}} is was restarted {{$value}}
+            times within the last hour
+          summary: Pod is restarting frequently
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"v1","data":{"icp_base_rules.yml":"groups:\n-
+      name: node.rules\n  rules:\n  - alert: ICPNodeExporterDown\n    expr: absent(up{component=\"nodeexporter\"}
+      == 1)\n    for: 10m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      Prometheus could not scrape a node-exporter for more than 10m,\n        or node-exporters
+      have disappeared from discovery.\n      summary: node-exporter cannot be scraped\n  -
+      alert: ICPNodeOutOfDisk\n    expr: kube_node_status_condition{condition=\"OutOfDisk\",status=\"true\"}
+      == 1\n    labels:\n      service: ICP\n      severity: critical\n    annotations:\n      description:
+      ''{{ $labels.node }} has run out of disk space.''\n      summary: Node ran out
+      of disk space.\n  - alert: ICPNodeMemoryPressure\n    expr: kube_node_status_condition{condition=\"MemoryPressure\",status=\"true\"}
+      ==\n      1\n    labels:\n      service: ICP\n      severity: warning\n    annotations:\n      description:
+      ''{{ $labels.node }} is under memory pressure.''\n      summary: Node is under
+      memory pressure.\n  - alert: ICPNodeDiskPressure\n    expr: kube_node_status_condition{condition=\"DiskPressure\",status=\"true\"}
+      == 1\n    labels:\n      service: ICP\n      severity: warning\n    annotations:\n      description:
+      ''{{ $labels.node }} is under disk pressure.''\n      summary: Node is under
+      disk pressure.\n  - alert: ICPHostCPUUtilisation\n    expr: 100 - (avg by(instance)
+      (irate(node_cpu{mode=\"idle\"}[5m])) * 100) \u003e 70\n    for: 20m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: ''High CPU utilisation detected
+      for instance {{ $labels.instance_id\n        }} tagged as: {{ $labels.instance_name_tag
+      }}, the utilisation is currently:\n        {{ $value }}%''\n      summary: CPU
+      Utilisation Alert\n  - alert: ICPPreditciveHostDiskSpace\n    expr: predict_linear(node_filesystem_free{mountpoint=\"/\"}[4h],
+      4 * 3600) \u003c 0\n    for: 30m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      ''Based on recent sampling, the disk is likely to will fill on volume\n        {{
+      $labels.mountpoint }} within the next 4 hours for instace: {{ $labels.instance_id\n        }}
+      tagged as: {{ $labels.instance_name_tag }}''\n      summary: Predictive Disk
+      Space Utilisation Alert\n  - alert: ICPHostHighMemeoryLoad\n    expr: (sum(node_memory_MemTotal)
+      - sum(node_memory_MemFree + node_memory_Buffers\n      + node_memory_Cached))
+      / sum(node_memory_MemTotal) * 100 \u003e 85\n    labels:\n      severity: warning\n    annotations:\n      description:
+      Memory of a host is almost full for instance {{ $labels.instance_id\n        }}\n      summary:
+      Memory utilization Alert\n  - alert: ICPNodeSwapUsage\n    expr: (((node_memory_SwapTotal
+      - node_memory_SwapFree) / node_memory_SwapTotal)\n      * 100) \u003e 75\n    for:
+      2m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      ''{{$labels.instance}}: Swap usage usage is above 75% (current value\n        is:
+      {{ $value }})''\n      summary: ''{{$labels.instance}}: Swap usage detected''\n-
+      name: prometheus.rules\n  rules:\n  - alert: PrometheusConfigReloadFailed\n    expr:
+      prometheus_config_last_reload_successful == 0\n    for: 10m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: Reloading Prometheus configuration
+      has failed for {{ $labels.namespace\n        }}/{{ $labels.pod}}.\n      summary:
+      Prometheus configuration reload has failed\n  - alert: PrometheusIngestionThrottling\n    expr:
+      prometheus_local_storage_persistence_urgency_score \u003e 0.95\n    for: 1m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: Prometheus cannot persist chunks
+      to disk fast enough. It''s urgency\n        value is {{$value}}.\n      summary:
+      Prometheus is (or borderline) throttling ingestion of metrics\n  - alert: PrometheusNotificationQueueRunningFull\n    expr:
+      predict_linear(prometheus_notifications_queue_length[5m], 60 * 30) \u003e prometheus_notifications_queue_capacity\n    for:
+      10m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      Prometheus alert notification queue is running full for {{$labels.namespace}}/{{$labels.pod}}\n      summary:
+      Prometheus alert notification queue is running full\n  - alert: PrometheusErrorSendingAlerts\n    expr:
+      rate(prometheus_notifications_errors_total[5m]) / rate(prometheus_notifications_sent_total[5m])\n      \u003e
+      0.01\n    for: 10m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      Errors while sending alerts from Prometheus {{$labels.namespace}}/{{$labels.pod}}\n        to
+      Alertmanager {{$labels.Alertmanager}}\n      summary: Errors while sending alert
+      from Prometheus\n  - alert: PrometheusErrorSendingAlerts\n    expr: rate(prometheus_notifications_errors_total[5m])
+      / rate(prometheus_notifications_sent_total[5m])\n      \u003e 0.03\n    for:
+      10m\n    labels:\n      severity: critical\n    annotations:\n      description:
+      Errors while sending alerts from Prometheus {{$labels.namespace}}/{{$labels.pod}}\n        to
+      Alertmanager {{$labels.Alertmanager}}\n      summary: Errors while sending alert
+      from Prometheus\n  - alert: PrometheusNotConnectedToAlertmanagers\n    expr:
+      prometheus_notifications_alertmanagers_discovered \u003c 1\n    for: 10m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: Prometheus {{ $labels.namespace
+      }}/{{ $labels.pod}} is not connected\n        to any Alertmanagers\n      summary:
+      Prometheus is not connected to any Alertmanagers\n- name: kubelet.rules\n  rules:\n  -
+      alert: ICPNodeNotReady\n    expr: kube_node_status_condition{condition=\"Ready\",status=\"true\"}
+      == 0\n    for: 1h\n    labels:\n      severity: warning\n    annotations:\n      description:
+      The Kubelet on {{ $labels.node }} has not checked in with the API,\n        or
+      has set itself to NotReady, for more than an hour\n      summary: Node status
+      is NotReady\n  - alert: ICPManyNodesNotReady\n    expr: count(kube_node_status_condition{condition=\"Ready\",status=\"true\"}
+      == 0)\n      \u003e 1 and (count(kube_node_status_condition{condition=\"Ready\",status=\"true\"}
+      ==\n      0) / count(kube_node_status_condition{condition=\"Ready\",status=\"true\"}))
+      \u003e 0.2\n    for: 1m\n    labels:\n      severity: critical\n    annotations:\n      description:
+      ''{{ $value }} Kubernetes nodes (more than 10% are in the NotReady\n        state).''\n      summary:
+      Many Kubernetes nodes are Not Ready\n  - alert: ICPKubeletDown\n    expr: count(up{job=\"kubernetes-nodes\"}
+      == 0) / count(up{job=\"kubernetes-nodes\"})\n      \u003e 0.03\n    for: 1h\n    labels:\n      severity:
+      warning\n    annotations:\n      description: Prometheus failed to scrape {{
+      $value }}% of kubelets.\n      summary: Many Kubelets cannot be scraped\n  -
+      alert: ICPKubeletDown\n    expr: absent(up{job=\"kubernetes-nodes\"} == 1) or
+      count(up{job=\"kubernetes-nodes\"}\n      == 0) / count(up{job=\"kubernetes-nodes\"})
+      \u003e 0.1\n    for: 1h\n    labels:\n      severity: critical\n    annotations:\n      description:
+      Prometheus failed to scrape {{ $value }}% of kubelets, or all Kubelets\n        have
+      disappeared from service discovery.\n      summary: Many Kubelets cannot be
+      scraped\n  - alert: ICPKubeletTooManyPods\n    expr: kubelet_running_pod_count
+      \u003e 110\n    labels:\n      severity: warning\n    annotations:\n      description:
+      Kubelet {{$labels.instance}} is running {{$value}} pods, close\n        to the
+      limit of 110\n      summary: Kubelet is close to pod limit\n- name: kube-apiserver.rules\n  rules:\n  -
+      alert: ICPApiserverDown\n    expr: absent(up{job=\"kubernetes-apiservers\"}
+      == 1)\n    for: 5m\n    labels:\n      severity: critical\n    annotations:\n      description:
+      Prometheus failed to scrape API server(s), or all API servers have\n        disappeared
+      from service discovery.\n      summary: API server unreachable\n  - alert: ICPApiServerLatency\n    expr:
+      histogram_quantile(0.99, sum without(instance, resource) (apiserver_request_latencies_bucket{verb!~\"CONNECT|WATCHLIST|WATCH|PROXY\"}))\n      /
+      1e+06 \u003e 1\n    for: 10m\n    labels:\n      severity: warning\n    annotations:\n      description:
+      99th percentile Latency for {{ $labels.verb }} requests to the\n        kube-apiserver
+      is higher than 1s.\n      summary: Kubernetes apiserver latency is high\n- name:
+      general.rules\n  rules:\n  - alert: ICPMonitoringTargetDown\n    expr: 100 *
+      (count by(job) (up == 0) / count by(job) (up)) \u003e 10\n    for: 10m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: ''{{ $value }}% or more of {{
+      $labels.job }} targets are down.''\n      summary: Targets are down\n  - alert:
+      ICPMonitoringDeadMansSwitch\n    expr: vector(1)\n    labels:\n      severity:
+      none\n    annotations:\n      description: This is a DeadMansSwitch meant to
+      ensure that the entire Alerting\n        pipeline is functional.\n      summary:
+      Alerting DeadMansSwitch\n  - alert: ICPTooManyOpenFileDescriptors\n    expr:
+      100 * (process_open_fds / process_max_fds) \u003e 95\n    for: 10m\n    labels:\n      severity:
+      critical\n    annotations:\n      description: ''{{ $labels.job }}: {{ $labels.namespace
+      }}/{{ $labels.pod }} ({{\n        $labels.instance }}) is using {{ $value }}%
+      of the available file/socket descriptors.''\n      summary: Too many open file
+      descriptors for the monitoring target\n  - record: instance:fd_utilization\n    expr:
+      process_open_fds / process_max_fds\n  - alert: ICPFdExhaustionClose\n    expr:
+      predict_linear(instance:fd_utilization[1h], 3600 * 4) \u003e 1\n    for: 10m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: ''{{ $labels.job }}: {{ $labels.namespace
+      }}/{{ $labels.pod }} ({{\n        $labels.instance }}) instance will exhaust
+      in file/socket descriptors soon''\n      summary: File descriptors soon exhausted
+      for the monitoring target\n  - alert: ICPFdExhaustionClose\n    expr: predict_linear(instance:fd_utilization[10m],
+      3600) \u003e 1\n    for: 10m\n    labels:\n      severity: critical\n    annotations:\n      description:
+      ''{{ $labels.job }}: {{ $labels.namespace }}/{{ $labels.pod }} ({{\n        $labels.instance
+      }}) instance will exhaust in file/socket descriptors soon''\n      summary:
+      File descriptors soon exhausted for the monitoring target\n  - alert: ICPPodFrequentlyRestarting\n    expr:
+      delta(kube_pod_container_status_restarts[1h]) \u003e 2\n    for: 10m\n    labels:\n      severity:
+      warning\n    annotations:\n      description: Pod {{$labels.namespaces}}/{{$labels.pod}}
+      is was restarted {{$value}}\n        times within the last hour\n      summary:
+      Pod is restarting frequently\n"},"kind":"ConfigMap","metadata":{"annotations":{},"creationTimestamp":"2018-03-31T10:06:18Z","labels":{"app":"monitoring-prometheus","component":"prometheus"},"name":"alert-rules","namespace":"kube-system","resourceVersion":"2068","selfLink":"/api/v1/namespaces/kube-system/configmaps/alert-rules","uid":"277d0b13-34cb-11e8-ab2e-005056a7d750"}}'
+  creationTimestamp: 2018-03-31T14:56:13Z
+  labels:
+    app: monitoring-prometheus
+    component: prometheus
+  name: alert-rules
+  namespace: kube-system
+  resourceVersion: "28987"
+  selfLink: /api/v1/namespaces/kube-system/configmaps/alert-rules
+  uid: a7ec4341-34f3-11e8-ab2e-005056a7d750
